@@ -32,9 +32,8 @@ fn main() {
         .get_matches();
 
     match matches.subcommand() {
-        ("set", Some(_matches)) => {
-            eprintln!("unimplemented");
-            exit(1);
+        ("set", Some(matches)) => {
+            matches.
         }
         ("get", Some(_matches)) => {
             eprintln!("unimplemented");

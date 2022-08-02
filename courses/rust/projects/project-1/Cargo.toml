@@ -1,9 +1,9 @@
 [package]
 name = "kvs"
 version = "0.1.0"
-authors = ["Yilin Chen <sticnarf@gmail.com>"]
+authors = ["RT_Enzyme <RT_Enzyme@163.com>"]
 description = "A key-value store"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 clap = "2.32.0"
