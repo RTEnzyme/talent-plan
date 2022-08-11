@@ -1,4 +1,7 @@
 #![deny(missing_docs)]
+//! # bitcask_impl
+//! this KvStore implement bitcask model,  which is a 
+//! log-structured key-value database.
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{create_dir_all, File, read_dir, OpenOptions, self};
@@ -11,21 +14,28 @@ use crate::{Result, KvsError, Cmd};
 
 const COMPACT_THREADHOLD: u64 = 1024 * 1024;
 ///
-/// KvStore is a in-memory key-value store,
-/// just implemented by built-in HashMap Data Struct
+/// KvStore is a log-structured key-value store,
+/// inspired by bitcask model.
 ///
 /// # Example
 ///
-/// ```
-/// use kvs::KvStore;
-///
-/// let mut store = KvStore::open();
+/// ```rust
+/// use kvs::{KvStore, Result};
+/// use tempfile::TempDir;
+/// # fn test() -> Result<()> {
+/// let temp_dir = TempDir::new().expect("unable to create temporary working directory");
+/// let mut store = KvStore::open(temp_dir.path())?;
 /// store.set("key1".to_owned(), "value1".to_owned());
 /// store.set("key2".to_owned(), "value2".to_owned());
-/// assert_eq!(store.get("key1".to_owned()), Some("value1".to_owned()));
-/// assert_eq!(store.get("key2".to_owned()), Some("value2".to_owned()));
-/// store.remove("key1".to_owned());
-/// assert_eq!(store.get("key1".to_owned()), None);
+/// assert_eq!(store.get("key1".to_owned())?, Some("value1".to_owned()));
+/// assert_eq!(store.get("key2".to_owned())?, Some("value2".to_owned()));
+/// store.remove("key1".to_owned())?;
+/// assert_eq!(store.get("key1".to_owned())?, None);
+/// # Ok(())
+/// }
+/// # fn main() {
+/// # test();
+/// # }
 /// ```
 pub struct KvStore {
     key_dir: BTreeMap<String, CmdPos>,
@@ -40,9 +50,17 @@ pub struct KvStore {
 
 impl KvStore {
 
-    /// new a KvStore by a temp path
+    /// open a KvStore by a temp path. Only if open a KvStore instance
+    /// , other operation can be used.
     /// 
-    /// #
+    /// # Example
+    /// ```rust
+    /// use kvs::{KvStore, Result};
+    /// use tempfile::TempDir;
+    /// 
+    /// let temp_file = TempDir::new().expect("unable to create temporary working directory");
+    /// let mut store = KvStore::open(temp_file.path());
+    /// ```
     pub fn open(path: impl Into<PathBuf>) -> Result<Self>{
         // create store path
         let path = path.into();
@@ -78,14 +96,16 @@ impl KvStore {
     ///
     /// # Example
     /// ```rust
-    /// use kvs::KvStore;
-    ///
-    /// let mut kv = KvStore::new();
-    /// assert_eq!(kv.get("test".to_owned()), None);
-    /// kv.set("test".to_owned(), "test1".to_owned());
-    /// assert_eq!(kv.get("test".to_owned()), Some("test1".to_owned()));
-    /// kv.set("test".to_owned(), "test2".to_owned());
-    /// assert_eq!(kv.get("test".to_owned()), Some("test2".to_owned()));
+    /// use kvs::{KvStore, Result};
+    /// use tempfile::TempDir;
+    /// 
+    /// let temp_file = TempDir::new().expect("unable to create temporary working directory");
+    /// let mut kv = KvStore::open(temp_file.path()).unwrap();
+    /// assert_eq!(kv.get("test".to_owned()).unwrap(), None);
+    /// kv.set("test".to_owned(), "test1".to_owned()).unwrap();
+    /// assert_eq!(kv.get("test".to_owned()).unwrap(), Some("test1".to_owned()));
+    /// kv.set("test".to_owned(), "test2".to_owned()).unwrap();
+    /// assert_eq!(kv.get("test".to_owned()).unwrap(), Some("test2".to_owned()));
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
         let cmd = Cmd::Set { key, value };
@@ -107,12 +127,14 @@ impl KvStore {
     ///
     /// # Example
     /// ```rust
-    /// use kvs::KvStore;
+    /// use kvs::{KvStore, Result};
+    /// use tempfile::TempDir;
     ///
-    /// let mut kv = KvStore::new();
-    /// kv.set("test".to_owned(), "test1".to_owned());
-    /// let v = kv.get("test".to_owned());
-    /// assert_eq!(v, "test1".to_owned());
+    /// let temp_file = TempDir::new().expect("unable to create temporary working directory");
+    /// let mut kv = KvStore::open(temp_file.path()).unwrap();
+    /// kv.set("test".to_owned(), "test1".to_owned()).unwrap();
+    /// let v = kv.get("test".to_owned()).unwrap();
+    /// assert_eq!(v, Some("test1".to_owned()));
     /// ```
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
         // convert Option<&T> to Option<T>
@@ -137,14 +159,16 @@ impl KvStore {
     ///
     /// # Example
     /// ```rust
-    /// use kvs::KvStore;
+    /// use kvs::{KvStore, Result};
+    /// use tempfile::TempDir;
     ///
-    /// let mut kv = KvStore::new();
-    /// assert_eq!(kv.get("test".to_owned()), None);
-    /// kv.set("test".to_owned(), "test1".to_owned());
-    /// assert_eq!(kv.get("test".to_owned()), Some("test1".to_owned()));
-    /// kv.remove("test".to_owned());
-    /// assert_eq!(kv.get("test".to_owned()), None);
+    /// let temp_file = TempDir::new().expect("unable to create temporary working directory");
+    /// let mut kv = KvStore::open(temp_file.path()).unwrap();
+    /// assert_eq!(kv.get("test".to_owned()).unwrap(), None);
+    /// kv.set("test".to_owned(), "test1".to_owned()).unwrap();
+    /// assert_eq!(kv.get("test".to_owned()).unwrap(), Some("test1".to_owned()));
+    /// kv.remove("test".to_owned()).unwrap();
+    /// assert_eq!(kv.get("test".to_owned()).unwrap(), None);
     /// ```
     pub fn remove(&mut self, key: String) -> Result<()> {
         if self.key_dir.contains_key(&key) {
