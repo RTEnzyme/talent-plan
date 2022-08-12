@@ -1,7 +1,7 @@
 mod bitcask_impl;
-mod errors;
 mod cmd;
+mod errors;
 
 pub use bitcask_impl::KvStore;
-pub use errors::{Result, KvsError};
 pub use cmd::Cmd;
+pub use errors::{KvsError, Result};
