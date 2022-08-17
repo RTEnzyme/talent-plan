@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use kvs::{KvStore, KvsEngine, SledKvsEngine};
+use kvs::{KvStore, KvsEngine, SledKvsEngine, Engine};
 use rand::prelude::*;
 use sled;
 use tempfile::TempDir;

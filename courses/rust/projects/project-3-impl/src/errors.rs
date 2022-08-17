@@ -1,3 +1,5 @@
+use std::net;
+
 use failure::Fail;
 
 #[derive(Fail, Debug)]
@@ -10,6 +12,10 @@ pub enum KvsError {
     IoErr(#[cause] std::io::Error),
     #[fail(display = "{}", _0)]
     SerdeErr(#[cause] serde_json::Error),
+    #[fail(display = "{}", _0)]
+    IpParseErr(#[cause] net::AddrParseError),
+    #[fail(display = "{}", _0)]
+    StringErr(String),
 }
 
 impl From<std::io::Error> for KvsError {
@@ -21,6 +27,12 @@ impl From<std::io::Error> for KvsError {
 impl From<serde_json::Error> for KvsError {
     fn from(e: serde_json::Error) -> Self {
         Self::SerdeErr(e)
+    }
+}
+
+impl From<net::AddrParseError> for KvsError {
+    fn from(e: net::AddrParseError) -> Self {
+        Self::IpParseErr(e)
     }
 }
 
