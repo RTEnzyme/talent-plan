@@ -1,8 +1,11 @@
-use std::{net::TcpStream, io::{BufReader, BufWriter, Write}};
+use std::{
+    io::{BufReader, BufWriter, Write},
+    net::TcpStream,
+};
 
-use crate::{Result, Request, GetResp, KvsError, SetResp, RemoveResp};
+use crate::{GetResp, KvsError, RemoveResp, Request, Result, SetResp};
 use serde::Deserialize;
-use serde_json::{Deserializer, de::IoRead};
+use serde_json::{de::IoRead, Deserializer};
 pub struct Client {
     reader: Deserializer<IoRead<BufReader<TcpStream>>>,
     writer: BufWriter<TcpStream>,
@@ -10,13 +13,10 @@ pub struct Client {
 
 impl Client {
     pub fn connect(addr: &str) -> Result<Self> {
-        let mut stream = TcpStream::connect(addr)?;
+        let stream = TcpStream::connect(addr)?;
         let reader = Deserializer::from_reader(BufReader::new(stream.try_clone()?));
         let writer = BufWriter::new(stream);
-        Ok(Self{
-            reader, 
-            writer
-        })
+        Ok(Self { reader, writer })
     }
 
     pub fn get(&mut self, key: String) -> Result<Option<String>> {

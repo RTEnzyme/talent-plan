@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use kvs::{KvStore, KvsEngine, SledKvsEngine, Engine};
+use kvs::{Engine, KvsEngine, SledKvsEngine};
 use rand::prelude::*;
 use sled;
 use tempfile::TempDir;
@@ -10,7 +10,7 @@ fn set_bench(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let temp_dir = TempDir::new().unwrap();
-                (KvStore::open(temp_dir.path()).unwrap(), temp_dir)
+                (KvsEngine::open(temp_dir.path()).unwrap(), temp_dir)
             },
             |(mut store, _temp_dir)| {
                 for i in 1..(1 << 12) {
@@ -42,7 +42,7 @@ fn get_bench(c: &mut Criterion) {
     for i in &vec![8, 12, 16, 20] {
         group.bench_with_input(format!("kvs_{}", i), i, |b, i| {
             let temp_dir = TempDir::new().unwrap();
-            let mut store = KvStore::open(temp_dir.path()).unwrap();
+            let mut store = KvsEngine::open(temp_dir.path()).unwrap();
             for key_i in 1..(1 << i) {
                 store
                     .set(format!("key{}", key_i), "value".to_string())

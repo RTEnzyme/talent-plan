@@ -1,8 +1,7 @@
 use clap::{command, Arg};
-use kvs::{KvStore, Result, addr_check, Server, KvsEngine, Engine, SledKvsEngine};
-use tracing::{warn, info, error, Level};
-use std::{env::current_dir, process::exit, fs};
-use tracing_subscriber;
+use kvs::{addr_check, KvsEngine, Result, Server, SledKvsEngine};
+use std::{env::current_dir, fs, process::exit};
+use tracing::{error, info, warn, Level};
 
 fn main() {
     let tgt = "svr-main";
@@ -11,7 +10,7 @@ fn main() {
         .with_max_level(Level::DEBUG)
         .flatten_event(true)
         .init();
-    info!(target=tgt, "starting the server");
+    info!(target = tgt, "starting the server");
     let matches = command!() // requires `cargo` feature
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
@@ -33,9 +32,11 @@ fn main() {
         )
         .get_matches();
     let res = current_engine().and_then(move |curr_engine| {
-        let ip_port = matches.get_one::<String>("addr").expect("please give a valid ip:port");
-        if !addr_check(&ip_port) {
-            error!(msg="incorrect ip:port format");
+        let ip_port = matches
+            .get_one::<String>("addr")
+            .expect("please give a valid ip:port");
+        if !addr_check(ip_port) {
+            error!(msg = "incorrect ip:port format");
             exit(1);
         }
         let mut engine = matches.get_one("engine");
@@ -43,10 +44,10 @@ fn main() {
             engine = curr_engine.as_ref();
         }
         if curr_engine.is_some() && engine != curr_engine.as_ref() {
-            error!(msg="Mismatched engine!");
+            error!(msg = "Mismatched engine!");
             exit(1);
         }
-        info!(msg="finish config", engine=engine, ip_port=ip_port);
+        info!(msg = "finish config", engine = engine, ip_port = ip_port);
         run(engine.unwrap(), ip_port)
     });
     if let Err(e) = res {
@@ -58,15 +59,11 @@ fn main() {
 fn run(engine: &str, ip_port: &str) -> Result<()> {
     let current_dir = current_dir()?;
     // change the engine option in dir
-    fs::write(current_dir.join("engine"), format!("{}", engine))?;
-    info!(msg="flush engine option to engine file", engine=engine);
+    fs::write(current_dir.join("engine"), engine)?;
+    info!(msg = "flush engine option to engine file", engine = engine);
     match engine {
-        "kvs" => {
-            Server::new(KvsEngine::open(current_dir)?).run(ip_port)
-        },
-        "sled" => {
-            Server::new(SledKvsEngine::open(current_dir)).run(ip_port)
-        },
+        "kvs" => Server::new(KvsEngine::open(current_dir)?).run(ip_port),
+        "sled" => Server::new(SledKvsEngine::open(current_dir)?).run(ip_port),
         _ => unreachable!(),
     }
 }

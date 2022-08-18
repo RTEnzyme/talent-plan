@@ -1,18 +1,20 @@
-use std::{net::{TcpListener, TcpStream}, io::{BufReader, BufWriter, Write}, fmt::Debug};
+use std::{
+    fmt::Debug,
+    io::{BufReader, BufWriter, Write},
+    net::{TcpListener, TcpStream},
+};
 
 use serde_json::Deserializer;
-use tracing::{warn, info, debug, error, Level, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
-
-use crate::{Engine, Result, Request, GetResp, SetResp, RemoveResp};
+use crate::{Engine, GetResp, RemoveResp, Request, Result, SetResp};
 
 #[derive(Debug)]
-pub struct Server<E: Engine+Debug> {
+pub struct Server<E: Engine + Debug> {
     engine: E,
 }
 
-
-impl<E: Engine+Debug> Server<E> {
+impl<E: Engine + Debug> Server<E> {
     pub fn new(engine: E) -> Self {
         Self { engine }
     }
@@ -27,7 +29,7 @@ impl<E: Engine+Debug> Server<E> {
                     if let Err(e) = self.handle_client(s) {
                         error!(msg="handle commands error", err=%e);
                     }
-                },
+                }
                 Err(e) => {
                     error!(msg="handle TCP connection error", err=%e);
                 }
@@ -42,7 +44,7 @@ impl<E: Engine+Debug> Server<E> {
         let reader = BufReader::new(&stream);
         let mut writer = BufWriter::new(&stream);
         let reqs = Deserializer::from_reader(reader).into_iter::<Request>();
-        info!(msg="recieve a request", from=format!("{}", peer_addr));
+        info!(msg = "recieve a request", from = format!("{}", peer_addr));
 
         macro_rules! send_resp {
             ($resp:expr) => {{
@@ -50,7 +52,7 @@ impl<E: Engine+Debug> Server<E> {
                 serde_json::to_writer(&mut writer, &resp)?;
                 writer.flush()?;
                 debug!(msg="Response sent", to=format!("{}", peer_addr), resp=?resp);
-            };};
+            }};
         }
 
         for req in reqs {
@@ -66,10 +68,9 @@ impl<E: Engine+Debug> Server<E> {
                 Request::Remove { key } => send_resp!(match self.engine.remove(key) {
                     Ok(_) => RemoveResp::Ok(()),
                     Err(e) => RemoveResp::Err(format!("{}", e)),
-                })
+                }),
             }
         }
         Ok(())
     }
 }
-

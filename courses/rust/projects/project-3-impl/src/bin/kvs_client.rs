@@ -1,7 +1,6 @@
-use clap::{arg, command, Command, Arg};
-use kvs::{KvStore, Result, addr_check, Client};
-use std::{env::current_dir, process::exit, net::IpAddr, io::BufRead};
-
+use clap::{arg, command, Arg, Command};
+use kvs::{addr_check, Client, Result};
+use std::process::exit;
 
 fn main() -> Result<()> {
     let matches = command!() // requires `cargo` feature
@@ -20,23 +19,26 @@ fn main() -> Result<()> {
                 .about("remove a key-value")
                 .arg(arg!([key] "key").required(true)),
         ])
-        .arg(Arg::new("addr")
-        .long("addr")
-        .name("addr")
-        .help("the server ip-port")
-        .default_value("127.0.0.1:4000")
-        .takes_value(true)
-    )
+        .arg(
+            Arg::new("addr")
+                .long("addr")
+                .name("addr")
+                .help("the server ip-port")
+                .default_value("127.0.0.1:4000")
+                .takes_value(true),
+        )
         .get_matches();
-    let ip_port = matches.get_one::<String>("addr").expect("please give a valid ip:port");
-    if !addr_check(&ip_port) {
+    let ip_port = matches
+        .get_one::<String>("addr")
+        .expect("please give a valid ip:port");
+    if !addr_check(ip_port) {
         eprintln!("incorrect ip:port");
         exit(1);
     }
     match matches.subcommand() {
         Some(("get", m)) => {
             let key: &String = m.get_one("key").unwrap();
-            
+
             let mut client = Client::connect(ip_port)?;
             let value = client.get(key.to_owned())?;
             match value {
@@ -52,7 +54,7 @@ fn main() -> Result<()> {
             match client.set(key.to_owned(), value.to_owned()) {
                 Ok(_) => println!("ok"),
                 Err(e) => println!("{}", e),
-            }           
+            }
         }
         Some(("rm", m)) => {
             let key: &String = m.get_one("key").unwrap();

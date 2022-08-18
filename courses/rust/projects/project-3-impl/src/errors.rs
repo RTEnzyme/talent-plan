@@ -1,4 +1,4 @@
-use std::net;
+use std::{net, string::FromUtf8Error};
 
 use failure::Fail;
 
@@ -16,6 +16,10 @@ pub enum KvsError {
     IpParseErr(#[cause] net::AddrParseError),
     #[fail(display = "{}", _0)]
     StringErr(String),
+    #[fail(display = "{}", _0)]
+    SledErr(#[cause] sled::Error),
+    #[fail(display = "{}", _0)]
+    FromUtf8Error(#[cause] FromUtf8Error),
 }
 
 impl From<std::io::Error> for KvsError {
@@ -33,6 +37,18 @@ impl From<serde_json::Error> for KvsError {
 impl From<net::AddrParseError> for KvsError {
     fn from(e: net::AddrParseError) -> Self {
         Self::IpParseErr(e)
+    }
+}
+
+impl From<sled::Error> for KvsError {
+    fn from(e: sled::Error) -> Self {
+        Self::SledErr(e)
+    }
+}
+
+impl From<FromUtf8Error> for KvsError {
+    fn from(e: FromUtf8Error) -> Self {
+        Self::FromUtf8Error(e)
     }
 }
 
