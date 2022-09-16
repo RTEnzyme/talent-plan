@@ -1,6 +1,7 @@
 use std::{net, string::FromUtf8Error};
 
 use failure::Fail;
+use sled::Guard;
 
 #[derive(Fail, Debug)]
 pub enum KvsError {

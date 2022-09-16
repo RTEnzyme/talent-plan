@@ -5,20 +5,19 @@
 use crate::Engine;
 
 use serde_json::Deserializer;
-use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::fs::{self, create_dir_all, read_dir, File, OpenOptions};
+use std::fs::{create_dir_all, read_dir, File, OpenOptions, remove_file};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
-use std::{collections::HashMap, path::PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use dashmap::DashMap;
 
 use crate::{Cmd, KvsError, Result};
 
-const COMPACT_THREADHOLD: u64 = 1024 * 1024;
+const COMPACT_THRESHOLD: u64 = 1024 * 1024;
 ///
 /// KvStore is a log-structured key-value store,
 /// inspired by bitcask model.
@@ -26,7 +25,7 @@ const COMPACT_THREADHOLD: u64 = 1024 * 1024;
 /// # Example
 ///
 /// ```rust
-/// use crate::{KvStore, Result};
+/// use crate::kvs::{KvStore, Result};
 /// use tempfile::TempDir;
 /// # fn test() -> Result<()> {
 /// let temp_dir = TempDir::new().expect("unable to create temporary working directory");
@@ -40,19 +39,34 @@ const COMPACT_THREADHOLD: u64 = 1024 * 1024;
 /// # Ok(())
 /// }
 /// # fn main() {
-/// # test();
+/// # test().expect("");
 /// # }
 /// ```
 #[derive(Debug, Clone)]
 pub struct KvsEngine {
     key_dir: Arc<DashMap<String, CmdPos>>,
-    readers: Arc<DashMap<u64, BufReaderWithPos<File>>>,
-
     path: Arc<PathBuf>,
-    writer: Arc<BufWriterWithPos<File>>,
-    current_file_id: Arc<u64>,
 
-    uncompact: AtomicU64(),
+    reader: KvsReader,
+    writer: Arc<Mutex<KvsWriter>>,
+}
+
+#[derive(Debug)]
+struct KvsReader {
+    path: Arc<PathBuf>,
+    readers: Arc<DashMap<u64, BufReaderWithPos<File>>>,
+    check_point: Arc<AtomicU64>,
+}
+
+#[derive(Debug)]
+struct KvsWriter {
+    reader: KvsReader,
+    key_dir: Arc<DashMap<String, CmdPos>>,
+    writer: BufWriterWithPos<File>,
+    path: Arc<PathBuf>,
+
+    current_file_id: u64,
+    uncompact: u64,
 }
 
 impl Engine for KvsEngine {
@@ -72,22 +86,7 @@ impl Engine for KvsEngine {
     /// assert_eq!(kv.get("test".to_owned()).unwrap(), Some("test2".to_owned()));
     /// ```
     fn set(&self, key: String, value: String) -> Result<()> {
-        let cmd = Cmd::Set { key, value };
-        let posi = self.writer.pos;
-        serde_json::to_writer(&mut self.writer, &cmd)?;
-        self.writer.flush()?;
-        if let Cmd::Set { key, .. } = cmd {
-            if let Some(old_cmd) = self
-                .key_dir
-                .insert(key, (self.current_file_id, posi..self.writer.pos).into())
-            {
-                self.uncompact += old_cmd.len;
-            }
-        }
-        if self.uncompact >= COMPACT_THREADHOLD {
-            self.compact()?;
-        }
-        Ok(())
+        self.writer.lock().unwrap().set(key, value)
     }
 
     /// get a value by key
@@ -105,19 +104,8 @@ impl Engine for KvsEngine {
     /// ```
     fn get(&self, key: String) -> Result<Option<String>> {
         // convert Option<&T> to Option<T>
-        if self.key_dir.contains_key(&key) {
-            let cmd_pos = self.key_dir.get(&key).expect("key not found");
-            let reader = self
-                .readers
-                .get_mut(&cmd_pos.file_id)
-                .expect("inconsistancy! Can't find this log file");
-            reader.seek(SeekFrom::Start(cmd_pos.kv_pos))?;
-            let reader = reader.take(cmd_pos.len);
-            if let Cmd::Set { value, .. } = serde_json::from_reader(reader)? {
-                Ok(Some(value))
-            } else {
-                Err(KvsError::CommandNotSupported)
-            }
+        if let Some(cmd_pos) = self.key_dir.get(&key) {
+            self.reader.read(cmd_pos.value())
         } else {
             Ok(None)
         }
@@ -140,17 +128,7 @@ impl Engine for KvsEngine {
     /// ```
     fn remove(&self, key: String) -> Result<()> {
         if self.key_dir.contains_key(&key) {
-            let cmd = Cmd::Remove { key };
-            serde_json::to_writer(&mut self.writer, &cmd)?;
-            self.writer.flush()?;
-            if let Cmd::Remove { key } = cmd {
-                let old_cmd = self.key_dir.remove(&key).expect("key not found");
-                self.uncompact += old_cmd.len;
-                if self.uncompact >= COMPACT_THREADHOLD {
-                    self.compact()?;
-                }
-            };
-            Ok(())
+            self.writer.lock().unwrap().remove(key)
         } else {
             Err(KvsError::KeyNotFound)
         }
@@ -174,8 +152,8 @@ impl KvsEngine {
         let path = path.into();
         let mut uncompact: u64 = 0;
         create_dir_all(&path)?;
-        let mut key_dir = BTreeMap::new();
-        let mut readers = HashMap::new();
+        let mut key_dir = DashMap::new();
+        let mut readers = DashMap::new();
 
         // load history file
         let file_list = sorted_file_list(&path)?;
@@ -187,37 +165,89 @@ impl KvsEngine {
 
         // create current log file
         let current_file_id = file_list.last().unwrap_or(&0) + 1;
-        let writer = new_log_file(current_file_id, &path, &mut readers)?;
-
+        let writer = new_log_file(current_file_id, &path)?;
+        readers.insert(current_file_id, BufReaderWithPos::new(
+            File::open(
+               to_log_file(current_file_id, &path))?
+        )?);
+        let path = Arc::new(path);
+        let reader = KvsReader {
+            path: path.clone(),
+            readers: Arc::new(readers),
+            check_point: Arc::new(AtomicU64::new(0)),
+        };
+        let key_dir = Arc::new(key_dir);
         // return
-        Ok(KvsEngine {
-            key_dir,
-            readers,
-            path,
-            writer,
-            current_file_id,
-            uncompact,
+        Ok(KvsEngine{
+            key_dir: key_dir.clone(),
+            path: path.clone(),
+            reader: reader.clone(),
+            writer: Arc::new(Mutex::new(KvsWriter {
+                reader: reader.clone(),
+                key_dir: key_dir.clone(),
+                writer,
+                current_file_id,
+                uncompact,
+                path,
+            }))
         })
+    }
+
+
+}
+
+impl KvsWriter {
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        let cmd = Cmd::Set { key, value };
+        let pos = self.writer.pos;
+        serde_json::to_writer(&mut self.writer, &cmd)?;
+        self.writer.flush()?;
+        if let Cmd::Set { key, .. } = cmd {
+            if let Some(old_cmd) = self
+                .key_dir
+                .insert(key, (self.current_file_id.into(), pos..self.writer.pos).into())
+            {
+                self.uncompact += old_cmd.len;
+            }
+        }
+        if self.uncompact >= COMPACT_THRESHOLD {
+            self.compact()?;
+        }
+        Ok(())
+    }
+
+    fn remove(&mut self, key: String) -> Result<()> {
+        let cmd = Cmd::Remove { key };
+        serde_json::to_writer(&mut self.writer, &cmd)?;
+        self.writer.flush()?;
+        if let Cmd::Remove { key } = cmd {
+            let old_cmd = self.key_dir.remove(&key).expect("key not found").1;
+            self.uncompact += old_cmd.len;
+            if self.uncompact >= COMPACT_THRESHOLD {
+                self.compact()?;
+            }
+        };
+        Ok(())
     }
 
     fn compact(&mut self) -> Result<()> {
         let compact_file_id = self.current_file_id + 1;
         self.current_file_id += 2;
-        self.writer = new_log_file(self.current_file_id, &self.path, &mut self.readers)?;
+        self.writer = new_log_file(self.current_file_id, &self.path)?;
 
-        let mut compact_writer = new_log_file(compact_file_id, &self.path, &mut self.readers)?;
+        let mut compact_writer = new_log_file(compact_file_id, &self.path)?;
         let mut compact_pos = 0;
-        for cmd_pos in &mut self.key_dir.values_mut() {
+        for mut cmd_pos in self.key_dir.iter_mut() {
             let CmdPos {
                 file_id,
                 kv_pos,
                 len,
-            } = cmd_pos;
-            let reader = self.readers.get_mut(&file_id).expect("can't find log file;");
-            if reader.pos != *kv_pos {
+            } = cmd_pos.value_mut();
+            let mut reader = self.reader.readers.get_mut(&file_id).expect("can't find log file;");
+            if reader.value_mut().pos != *kv_pos {
                 reader.seek(SeekFrom::Start(*kv_pos))?;
             }
-            let mut rdr = reader.take(*len);
+            let mut rdr = reader.value_mut().take(len.clone());
             io::copy(&mut rdr, &mut compact_writer)?;
 
             *file_id = compact_file_id;
@@ -227,17 +257,60 @@ impl KvsEngine {
         compact_writer.flush()?;
 
         let remove_files: Vec<_> = self
+            .reader
             .readers
-            .keys()
-            .filter(|&&k| k < compact_file_id)
-            .cloned()
+            .iter()
+            .map(|e| e.key().to_owned())
+            .filter(|&k| k < compact_file_id)
             .collect();
         for file in remove_files {
-            self.readers.remove(&file);
-            fs::remove_file(to_log_file(file, &self.path))?;
+            self.reader.readers.remove(&file);
+            remove_file(to_log_file(file, &self.path))?;
         }
+        // self.reader.
         self.uncompact = 0;
         Ok(())
+    }
+}
+
+impl KvsReader {
+    fn check_point(&self) {
+        while !self.readers.is_empty() {
+            let file_id = self.readers.iter().next().unwrap();
+            if self.check_point.load(Ordering::SeqCst) <= *file_id.key() {
+                break;
+            }
+            self.readers.remove(file_id.key());
+        }
+    }
+
+    fn read(&self, cmd_pos: &CmdPos) -> Result<Option<String>> {
+        self.check_point();
+        // if it doesn't contain the key, should we update it
+        if !self.readers.contains_key(&cmd_pos.file_id) {
+
+        }
+        let mut reader = self
+            .readers
+            .get_mut(&cmd_pos.file_id)
+            .expect("inconsistency! Can't find this log file");
+        reader.value_mut().seek(SeekFrom::Start(cmd_pos.kv_pos))?;
+        let reader = reader.value_mut().take(cmd_pos.len);
+        if let Cmd::Set { value, .. } = serde_json::from_reader(reader)? {
+            Ok(Some(value))
+        } else {
+            Err(KvsError::CommandNotSupported)
+        }
+    }
+}
+
+impl Clone for KvsReader {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            readers: self.readers.clone(),
+            check_point: self.check_point.clone()
+        }
     }
 }
 
@@ -343,7 +416,6 @@ fn sorted_file_list(path: &PathBuf) -> Result<Vec<u64>> {
 fn new_log_file(
     file_id: u64,
     dir: &Path,
-    readers: &mut HashMap<u64, BufReaderWithPos<File>>,
 ) -> Result<BufWriterWithPos<File>> {
     let path = to_log_file(file_id, dir);
     let writer = BufWriterWithPos::new(
@@ -353,7 +425,6 @@ fn new_log_file(
             .write(true)
             .open(&path)?,
     )?;
-    readers.insert(file_id, BufReaderWithPos::new(File::open(&path)?)?);
     Ok(writer)
 }
 
@@ -364,7 +435,7 @@ fn to_log_file(file_id: u64, dir: &Path) -> PathBuf {
 fn load_log(
     file_id: u64,
     reader: &mut BufReaderWithPos<File>,
-    key_dir: &mut BTreeMap<String, CmdPos>,
+    key_dir: &mut DashMap<String, CmdPos>,
 ) -> Result<u64> {
     let mut posi = reader.seek(SeekFrom::Start(0))?;
     let mut stream = Deserializer::from_reader(reader).into_iter::<Cmd>();
@@ -375,7 +446,7 @@ fn load_log(
             Cmd::Remove { key } => {
                 if let Some(old_cmd) = key_dir.remove(&key) {
                     // old command can be compacted
-                    uncompacted += old_cmd.len;
+                    uncompacted += old_cmd.1.len;
                 }
                 // this remove command alse can be compacted
                 uncompacted += new_pos - posi;

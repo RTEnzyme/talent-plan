@@ -1,5 +1,6 @@
 use crate::Result;
 
+mod shared_queue_threadpool;
 mod naive;
 
 pub use naive::NaiveThreadPool;

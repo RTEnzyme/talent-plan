@@ -4,19 +4,19 @@ use crate::Engine;
 use crate::KvsError;
 use crate::Result;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SledKvsEngine {
     db: Db,
 }
 
 impl Engine for SledKvsEngine {
-    fn set(&mut self, key: String, value: String) -> Result<()> {
+    fn set(&self, key: String, value: String) -> Result<()> {
         self.db.insert(key, value.into_bytes()).map(|_| ())?;
         // self.db.flush()?;
         Ok(())
     }
 
-    fn get(&mut self, key: String) -> Result<Option<String>> {
+    fn get(&self, key: String) -> Result<Option<String>> {
         Ok(self
             .db
             .get(key.as_bytes())?
@@ -25,7 +25,7 @@ impl Engine for SledKvsEngine {
             .transpose()?)
     }
 
-    fn remove(&mut self, key: String) -> Result<()> {
+    fn remove(&self, key: String) -> Result<()> {
         self.db.remove(key)?.ok_or(KvsError::KeyNotFound)?;
         self.db.flush()?;
         Ok(())
